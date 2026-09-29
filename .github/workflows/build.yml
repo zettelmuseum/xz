@@ -95,9 +95,7 @@ jobs:
             exit 1
           fi
 
-          echo "===== XZ VERSION ====="
-          "$FILE" --version
-
+          
           echo "===== STATIC BUILD OK ====="
           echo "Keine DT_NEEDED-Abhängigkeiten."
           echo "Kein PT_INTERP vorhanden."
