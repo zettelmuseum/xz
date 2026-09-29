@@ -35,6 +35,7 @@ jobs:
             automake \
             libtool \
             gettext \
+            autopoint \
             pkg-config
 
       - name: Build XZ
