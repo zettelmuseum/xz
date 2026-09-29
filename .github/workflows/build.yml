@@ -1,0 +1,133 @@
+name: Build static XZ 5.8.4 Android ARM64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    env:
+      API: 34
+      NDK_VERSION: 30.0.16248370
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'ndk;30.0.16248370'
+
+      - name: Checkout XZ 5.8.4
+        uses: actions/checkout@v4
+        with:
+          repository: tukaani-project/xz
+          ref: v5.8.4
+          path: xz
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            gettext \
+            pkg-config
+
+      - name: Build XZ
+        shell: bash
+        run: |
+          set -eux
+
+          NDK="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+
+          CC="$TOOLCHAIN/bin/aarch64-linux-android${API}-clang"
+          AR="$TOOLCHAIN/bin/llvm-ar"
+          RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
+          STRIP="$TOOLCHAIN/bin/llvm-strip"
+
+          cd xz
+
+          ./autogen.sh --no-po4a
+
+          mkdir ../build
+          cd ../build
+
+          ../xz/configure \
+            --host=aarch64-linux-android \
+            --build=x86_64-pc-linux-gnu \
+            --prefix=/usr \
+            --disable-shared \
+            --enable-static \
+            --disable-xzdec \
+            --disable-lzmadec \
+            --disable-lzmainfo \
+            --disable-scripts \
+            --disable-doc \
+            --disable-nls \
+            --disable-symbol-versions \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="-O2 -flto -ffunction-sections -fdata-sections" \
+            LDFLAGS="-static -pie -flto -Wl,--gc-sections"
+
+          make -j"$(nproc)"
+
+          "$STRIP" src/xz/xz
+
+      - name: Verify truly static
+        shell: bash
+        run: |
+          set -eux
+
+          XZ="build/src/xz/xz"
+
+          file "$XZ"
+
+          echo "=== Dynamic section ==="
+          readelf -d "$XZ" || true
+
+          echo "=== Program headers ==="
+          readelf -l "$XZ"
+
+          echo "=== Check for dynamic dependencies ==="
+
+          if readelf -d "$XZ" 2>/dev/null | grep -E 'NEEDED|INTERP'; then
+            echo "ERROR: Dynamic dependency detected!"
+            exit 1
+          fi
+
+          if readelf -l "$XZ" 2>/dev/null | grep -q 'INTERP'; then
+            echo "ERROR: ELF interpreter detected!"
+            exit 1
+          fi
+
+          echo "OK: no DT_NEEDED and no ELF interpreter."
+
+          echo "=== Version ==="
+          "$XZ" --version || true
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp build/src/xz/xz artifact/xz-aarch64-android
+          chmod 755 artifact/xz-aarch64-android
+
+          tar -czf xz-5.8.4-android-arm64-static.tar.gz \
+            -C artifact \
+            xz-aarch64-android
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: xz-5.8.4-android-arm64-static
+          path: |
+            xz-5.8.4-android-arm64-static.tar.gz
+            artifact/xz-aarch64-android
