@@ -52,6 +52,7 @@ jobs:
             --prefix=/usr \
             --disable-shared \
             --enable-static \
+            --enable-sandbox=no \
             --disable-xzdec \
             --disable-lzmadec \
             --disable-lzmainfo \
