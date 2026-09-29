@@ -1,4 +1,4 @@
-name: Build static XZ 5.8.4 Android ARM64
+name: Build XZ 5.8.4 ARM64 Static
 
 on:
   workflow_dispatch:
@@ -7,18 +7,14 @@ jobs:
   build:
     runs-on: ubuntu-24.04
 
-    env:
-      API: 34
-      NDK_VERSION: 30.0.16248370
-
     steps:
-      - name: Checkout build repository
+      - name: Checkout build repo
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@v1
         with:
-          packages: 'ndk;30.0.16248370'
+          version: 0.16.0
 
       - name: Checkout XZ 5.8.4
         uses: actions/checkout@v4
@@ -27,7 +23,7 @@ jobs:
           ref: v5.8.4
           path: xz
 
-      - name: Install build dependencies
+      - name: Install autotools
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -38,30 +34,20 @@ jobs:
             autopoint \
             pkg-config
 
-      - name: Build XZ
-        shell: bash
+      - name: Generate configure
+        working-directory: xz
         run: |
-          set -eux
-
-          NDK="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-
-          export PATH="$TOOLCHAIN/bin:$PATH"
-
-          CC="$TOOLCHAIN/bin/aarch64-linux-android${API}-clang"
-          AR="$TOOLCHAIN/bin/llvm-ar"
-          RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
-          STRIP="$TOOLCHAIN/bin/llvm-strip"
-
-          cd xz
-
           ./autogen.sh --no-po4a
 
-          mkdir ../build
-          cd ../build
-
-          ../xz/configure \
-            --host=aarch64-linux-android \
+      - name: Configure
+        working-directory: xz
+        env:
+          CC: zig cc -target aarch64-linux-musl
+          AR: zig ar
+          RANLIB: zig ranlib
+        run: |
+          ./configure \
+            --host=aarch64-linux-musl \
             --build=x86_64-pc-linux-gnu \
             --prefix=/usr \
             --disable-shared \
@@ -73,62 +59,68 @@ jobs:
             --disable-doc \
             --disable-nls \
             --disable-symbol-versions \
-            CC="$CC" \
-            AR="$AR" \
-            RANLIB="$RANLIB" \
-            CFLAGS="-O2 -flto -ffunction-sections -fdata-sections" \
-            LDFLAGS="-static -pie -flto -Wl,--gc-sections"
+            CFLAGS="-O2 -ffunction-sections -fdata-sections -fPIE" \
+            LDFLAGS="-static-pie -Wl,--gc-sections"
 
+      - name: Build
+        working-directory: xz
+        run: |
           make -j"$(nproc)"
 
-          "$STRIP" src/xz/xz
+      - name: Strip
+        working-directory: xz
+        run: |
+          zig strip src/xz/xz
 
-      - name: Verify truly static
-        shell: bash
+      - name: Verify ELF
+        working-directory: xz
         run: |
           set -eux
 
-          XZ="build/src/xz/xz"
+          FILE="src/xz/xz"
 
-          file "$XZ"
+          echo "===== FILE ====="
+          file "$FILE"
 
-          echo "=== Dynamic section ==="
-          readelf -d "$XZ" || true
+          echo "===== NEEDED ====="
+          readelf -d "$FILE" || true
 
-          echo "=== Program headers ==="
-          readelf -l "$XZ"
+          echo "===== INTERPRETER ====="
+          readelf -l "$FILE" | grep INTERP && {
+            echo "ERROR: PT_INTERP vorhanden"
+            exit 1
+          } || true
 
-          echo "=== Check for dynamic dependencies ==="
-
-          if readelf -d "$XZ" 2>/dev/null | grep -E 'NEEDED|INTERP'; then
-            echo "ERROR: Dynamic dependency detected!"
+          echo "===== DYNAMIC DEPENDENCIES ====="
+          if readelf -d "$FILE" 2>/dev/null | grep -q 'NEEDED'; then
+            echo "ERROR: DT_NEEDED vorhanden"
             exit 1
           fi
 
-          if readelf -l "$XZ" 2>/dev/null | grep -q 'INTERP'; then
-            echo "ERROR: ELF interpreter detected!"
-            exit 1
-          fi
+          echo "===== VERSION ====="
+          "$FILE" --version
 
-          echo "OK: no DT_NEEDED and no ELF interpreter."
-
-          echo "=== Version ==="
-          "$XZ" --version || true
+          echo "===== OK ====="
+          echo "100% statisches ARM64-ELF ohne DT_NEEDED/PT_INTERP"
 
       - name: Package
         run: |
-          mkdir -p artifact
-          cp build/src/xz/xz artifact/xz-aarch64-android
-          chmod 755 artifact/xz-aarch64-android
+          mkdir -p release
 
-          tar -czf xz-5.8.4-android-arm64-static.tar.gz \
-            -C artifact \
-            xz-aarch64-android
+          cp xz/src/xz/xz \
+             release/xz-5.8.4-aarch64-static
 
-      - name: Upload binary
+          chmod 755 release/xz-5.8.4-aarch64-static
+
+          tar -czf \
+            xz-5.8.4-aarch64-static.tar.gz \
+            -C release \
+            xz-5.8.4-aarch64-static
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xz-5.8.4-android-arm64-static
+          name: xz-5.8.4-aarch64-static
           path: |
-            xz-5.8.4-android-arm64-static.tar.gz
-            artifact/xz-aarch64-android
+            xz-5.8.4-aarch64-static.tar.gz
+            release/xz-5.8.4-aarch64-static
